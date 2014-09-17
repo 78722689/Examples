@@ -1,43 +1,31 @@
-#include <signal.h>
 #include <stdio.h>
-#include <stdlib.h>
-#define  ONE_K  1024
-void StrCln(int);
-void DoWork(char **, int);
+#include <signal.h>
+#include <unistd.h>
 
-void ADLM(int size)
+void show_handler(int sig)
 {
-  char *buffer;
-  if (signal((SIGUSR1), StrCln) == SIG_ERR) {
-    printf("Could not install user signal");
-    abort();
-  }
-  DoWork(&buffer, size);
-  return;
+    printf("I got signal %d\n", sig);
+    int i;
+    for(i = 0; i < 5; i++) {
+        printf("i = %d\n", i);
+        sleep(1);
+    }
 }
 
-void StrCln(int SIG_TYPE)
+int main(void)
 {
-  printf("Failed trying to malloc storage\n");
-  return;
-}
-
-void DoWork(char **buffer, int size)
-{
-  while (*buffer !=NULL)
-    *buffer = NULL;//= (char *)malloc(size*ONE_K);
-  if (*buffer == NULL) {
-     if (raise(SIGUSR1)) {
-        printf("Could not raise user signal");
-        abort();
-     }
-  }
-  return;
-}
-
-int main()
-{
-    ADLM(sizeof(int));
+    int i = 0;
+    struct sigaction act, oldact;
+    act.sa_handler = show_handler;
+    sigaddset(&act.sa_mask, SIGQUIT); // waiting for signal "CTRL+\"
+    sigaddset(&act.sa_mask, SIGTSTP); // Add terminate signal to signal-set.
+    act.sa_flags = SA_RESETHAND | SA_NODEFER; 
     
-    return 1;
+    sigaction(SIGINT, &act, &oldact);
+    while(1) {
+        sleep(1);
+        printf("sleeping %d\n", i);
+        i++;
+    }
+    sleep(2);
 }
