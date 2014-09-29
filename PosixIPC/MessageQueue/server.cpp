@@ -1,102 +1,93 @@
 #include <stdlib.h>
-#include "../common.h"
-
 #include <mqueue.h>
 #include <sys/stat.h>
 #include <signal.h>
-#include <errno.h>
+#include "../common.h"
 
-mqd_t mqd;
-struct mq_attr attr;
-struct sigevent sigev;
-char *ptr;
-unsigned int prio;
-size_t n;
-int rc;
- 
-void sig_usr1(int signo);
- 
-/*读取某消息队列,消息队列名通过参数传递*/
-/*当有消息放置到某个空的队列中时产生SIGUSR1信号*/
+// NOTE(mq_notify): 
+// 1. At any time, only one process may be registered for notification by a specific message queue.
+// 2. When the notification is sent to the registered process, its registration is removed, and the message queue is then be available for registration.
+
 int main(int argc, char *argv[])
 {
-    printf("%s; %s;%s\n", argv[0], argv[1], argv[2]);
+    mqd_t mqd;
+    struct mq_attr attr;
+    struct sigevent sigev;
+    char *ptr;
+    sigset_t newmask = {'\0'};
+    int signo = -1;
+    unsigned int prio;
+    
+    printf("Arg1: %s; Arg2: %s\n", argv[0], argv[1]);
     if(argc != 2)
     {
-        printf("Usage: argc <2\n");
+        printf("Please at least input 1 argument\n");
         exit(1);
     }
  
-    /*只读模式打开消息队列*/
     mqd = mq_open(argv[1], O_RDONLY | O_CREAT);
     if(mqd == (mqd_t)-1)
     {
-        printf("%d\n", errno);
         perror("mq_open");
         exit(1);
     }
  
-    // 取得消息队列属性，根据mq_msgsize动态申请内存
-    rc = mq_getattr(mqd, &attr);
-    if(rc < 0)
+    // Read property from message queue and allocate the memory from achiving attribute.
+    if(mq_getattr(mqd, &attr) < 0)
     {
-        perror("取得消息队列属性失败");
+        perror("get attr failure");
         exit(1);
     }
- 
-    /*动态申请保证能存放单条消息的内存*/
+
     ptr = (char*)calloc(attr.mq_msgsize, sizeof(char));
     if(NULL == ptr)
     {
-        printf("动态申请内存失败\n");
+        printf("allocate memory failure\n");
         mq_close(mqd);
         exit(1);
     }
  
-    //注册信号函数
-    signal(SIGUSR1, sig_usr1);
+    // reset sigset and fill the mask with SIGUSR1
+    sigemptyset(&newmask);
+    sigaddset(&newmask, SIGUSR1);
+    sigprocmask(SIG_BLOCK, &newmask, NULL);
+
+    // Register notification.
     sigev.sigev_notify = SIGEV_SIGNAL;
     sigev.sigev_signo = SIGUSR1;
- 
-    //注册通知
-    rc = mq_notify(mqd, &sigev); // 读取前需要再次注册
-    if(rc < 0)
+    if(mq_notify(mqd, &sigev) < 0) // 
     {
-        perror("通知注册失败");
+        perror("Register failure.");
         mq_close(mqd);
         free(ptr);
         exit(1);
     }
-    printf("mq_notify 1 done\n");
+
+    size_t ret = -1;
     for(;;)
     {
-        printf("pause\n");
-        pause();
+        // Waiting the singal with the queue changing from empty to non-empty
+        sigwait(&newmask, &signo);
+        if (SIGUSR1 == signo)
+        {
+            // Register again after signal arrived.
+            mq_notify(mqd, &sigev);
+            
+            if ((ret = mq_receive(mqd, ptr, attr.mq_msgsize, &prio)) < 0)
+            {
+                perror("mq_receive");
+                break;
+            }
+            
+            printf(" Received: %ld bytes\n context: %s proid:%u\n", (long)ret, ptr, prio);
+            
+            if (0 == strcmp(ptr, "quit\n")) break;
+        }
     }
+    
+    mq_close(mqd);
+    free(ptr);
  
     return 0;
 }
  
-void sig_usr1(int signo)
-{
-    rc = mq_notify(mqd, &sigev); // 读取前需要再次注册
-    if(rc < 0)
-    {
-        perror("通知注册失败");
-        mq_close(mqd);
-        free(ptr);
-        exit(1);
-    }
- 
-    printf("mq_notify 2 done\n");
-    /*接收一条消息*/
-    n = mq_receive(mqd, ptr, attr.mq_msgsize, &prio);
-    if(n < 0)
-    {
-        perror("读取失败");
-        mq_close(mqd);
-        free(ptr);
-        exit(1);
-    }
-    printf("Read: %ld byte\n context:%s\n proid: %u\n", (long)n, ptr, prio);
-}
